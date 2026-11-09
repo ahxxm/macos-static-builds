@@ -7,7 +7,7 @@ on:
     inputs:
       mozjpeg_ref:
         description: "mozjpeg branch, tag, or commit"
-        default: "master"
+        default: "v4.1.5"
         required: false
       jpegli_ref:
         description: "jpegli branch, tag, or commit"
@@ -23,7 +23,7 @@ concurrency:
 
 env:
   CMAKE_BUILD_TYPE: Release
-  CCACHE_DIR: ${{ runner.home }}/.ccache
+  CCACHE_DIR: ${{ runner.temp }}/ccache
   CCACHE_MAXSIZE: 1G
 
 jobs:
@@ -32,7 +32,7 @@ jobs:
     runs-on: macos-latest
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Check runner is arm64
         run: test "$(uname -m)" = "arm64"
@@ -44,32 +44,32 @@ jobs:
         run: |
           git clone --depth 1 https://github.com/mozilla/mozjpeg mozjpeg
           cd mozjpeg
-          git fetch --depth 1 origin "${{ inputs.mozjpeg_ref || 'master' }}"
+          git fetch --depth 1 origin "${{ inputs.mozjpeg_ref || 'v4.1.5' }}"
           git checkout FETCH_HEAD
 
       - name: Restore ccache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
-          path: ${{ runner.home }}/.ccache
+          path: ${{ runner.temp }}/ccache
           key: ccache-macos-arm64-${{ hashFiles('.github/workflows/build.yml') }}
           restore-keys: |
             ccache-macos-arm64-
 
       - name: Restore build directory
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: mozjpeg/build
-          key: mozjpeg-build-macos-arm64-${{ inputs.mozjpeg_ref || 'master' }}-${{ hashFiles('.github/workflows/build.yml') }}
+          key: mozjpeg-build-macos-arm64-${{ inputs.mozjpeg_ref || 'v4.1.5' }}-${{ hashFiles('.github/workflows/build.yml') }}
           restore-keys: |
-            mozjpeg-build-macos-arm64-${{ inputs.mozjpeg_ref || 'master' }}-
+            mozjpeg-build-macos-arm64-${{ inputs.mozjpeg_ref || 'v4.1.5' }}-
             mozjpeg-build-macos-arm64-
 
+      # v4.1.5 spells these ENABLE_SHARED/ENABLE_STATIC (master renamed them to BUILD_SHARED_LIBS).
       - name: Configure mozjpeg
         run: |
           cmake -S mozjpeg -B mozjpeg/build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_OSX_ARCHITECTURES=arm64 \
-            -DBUILD_SHARED_LIBS=OFF \
             -DENABLE_SHARED=OFF \
             -DENABLE_STATIC=ON \
             -DWITH_JAVA=OFF \
@@ -93,7 +93,7 @@ jobs:
           dist/mozjpeg/cjpeg -version || true
 
       - name: Upload cjpeg
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: mozjpeg-macos-arm64
           path: dist/mozjpeg/cjpeg
@@ -105,7 +105,7 @@ jobs:
     runs-on: macos-latest
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Check runner is arm64
         run: test "$(uname -m)" = "arm64"
@@ -122,15 +122,15 @@ jobs:
           git submodule update --init --recursive --depth 1
 
       - name: Restore ccache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
-          path: ${{ runner.home }}/.ccache
+          path: ${{ runner.temp }}/ccache
           key: ccache-macos-arm64-${{ hashFiles('.github/workflows/build.yml') }}
           restore-keys: |
             ccache-macos-arm64-
 
       - name: Restore build directory
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: jpegli/build
           key: jpegli-build-macos-arm64-${{ inputs.jpegli_ref || 'main' }}-${{ hashFiles('.github/workflows/build.yml') }}
@@ -145,10 +145,11 @@ jobs:
             -DCMAKE_OSX_ARCHITECTURES=arm64 \
             -DBUILD_SHARED_LIBS=OFF \
             -DJPEGLI_STATIC=ON \
+            -DJPEGLI_ENABLE_TOOLS=ON \
+            -DJPEGLI_BUNDLE_LIBPNG=ON \
             -DBUILD_TESTING=OFF \
             -DJPEGLI_ENABLE_BENCHMARK=OFF \
             -DJPEGLI_ENABLE_MANPAGES=OFF \
-            -DJPEGLI_ENABLE_DEVTOOLS=OFF \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
 
@@ -167,7 +168,7 @@ jobs:
           otool -L dist/jpegli/cjpegli
 
       - name: Upload jpegli cli
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: jpegli-macos-arm64
           path: dist/jpegli/
