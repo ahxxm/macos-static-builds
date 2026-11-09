@@ -86,6 +86,8 @@ jobs:
         run: cmake --build mozjpeg/build -j"$(sysctl -n hw.ncpu)"
 
       - name: Stage and verify cjpeg
+        env:
+          VERSION: ${{ inputs.mozjpeg_ref || 'v4.1.5' }}
         run: |
           mkdir -p dist/mozjpeg
           cp mozjpeg/build/cjpeg-static dist/mozjpeg/cjpeg
@@ -95,12 +97,14 @@ jobs:
           lipo -info dist/mozjpeg/cjpeg
           otool -L dist/mozjpeg/cjpeg
           dist/mozjpeg/cjpeg -version || true
+          (cd dist/mozjpeg && zip -q "../mozjpeg-${VERSION}.zip" cjpeg)
+          ls -la dist/*.zip
 
       - name: Upload cjpeg
         uses: actions/upload-artifact@v7
         with:
           name: mozjpeg-macos-arm64
-          path: dist/mozjpeg/cjpeg
+          path: dist/mozjpeg-*.zip
           if-no-files-found: error
           compression-level: 0
 
@@ -174,11 +178,47 @@ jobs:
           file dist/jpegli/cjpegli dist/jpegli/djpegli
           lipo -info dist/jpegli/cjpegli dist/jpegli/djpegli
           otool -L dist/jpegli/cjpegli
+          SHA=$(git -C jpegli rev-parse --short=6 HEAD)
+          echo "jpegli version (short sha): $SHA"
+          (cd dist/jpegli && zip -q "../cjpegli-${SHA}.zip" cjpegli)
+          (cd dist/jpegli && zip -q "../djpegli-${SHA}.zip" djpegli)
+          ls -la dist/*.zip
 
       - name: Upload jpegli cli
         uses: actions/upload-artifact@v7
         with:
           name: jpegli-macos-arm64
-          path: dist/jpegli/
+          path: |
+            dist/cjpegli-*.zip
+            dist/djpegli-*.zip
           if-no-files-found: error
           compression-level: 0
+
+  # Publishes only if both builds succeed. The release is named by year
+  # (YYYY), created once per year and updated on each successful run.
+  publish:
+    name: publish yearly release
+    needs: [mozjpeg, jpegli]
+    if: ${{ success() && github.event_name != 'pull_request' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v8
+        with:
+          path: dist
+
+      - name: Create or update yearly release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          YEAR=$(date -u +%Y)
+          ASSETS=$(find dist -name '*.zip' | sort)
+          echo "Release $YEAR assets:"
+          echo "$ASSETS"
+          if gh release view "$YEAR" >/dev/null 2>&1; then
+            gh release upload "$YEAR" $ASSETS --clobber
+          else
+            gh release create "$YEAR" $ASSETS --generate-notes --title "$YEAR"
+          fi
