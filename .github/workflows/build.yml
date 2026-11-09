@@ -23,7 +23,6 @@ concurrency:
 
 env:
   CMAKE_BUILD_TYPE: Release
-  CCACHE_DIR: ${{ runner.temp }}/ccache
   CCACHE_MAXSIZE: 1G
 
 jobs:
@@ -31,6 +30,8 @@ jobs:
     name: mozjpeg cjpeg (macos-arm64)
     runs-on: macos-latest
     timeout-minutes: 45
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v7
 
@@ -38,7 +39,7 @@ jobs:
         run: test "$(uname -m)" = "arm64"
 
       - name: Install build tools
-        run: brew install cmake ninja nasm ccache
+        run: brew install cmake ninja nasm ccache libpng
 
       - name: Clone mozjpeg
         run: |
@@ -65,23 +66,35 @@ jobs:
             mozjpeg-build-macos-arm64-
 
       # v4.1.5 spells these ENABLE_SHARED/ENABLE_STATIC (master renamed them to BUILD_SHARED_LIBS).
+      # PNG: libpng is linked as a static archive. mozjpeg restricts its own
+      # PNG search to the static suffix, and CMAKE_PREFIX_PATH points it at
+      # Homebrew libpng. zlib stays the system library on Apple, as upstream
+      # intends (macOS ships no static zlib).
       - name: Configure mozjpeg
+        env:
+          CCACHE_DIR: ${{ runner.temp }}/ccache
         run: |
           cmake -S mozjpeg -B mozjpeg/build -G Ninja \
+            -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DCMAKE_PREFIX_PATH="$(brew --prefix libpng)" \
             -DENABLE_SHARED=OFF \
             -DENABLE_STATIC=ON \
             -DWITH_JAVA=OFF \
             -DWITH_TURBOJPEG=OFF \
-            -DPNG_SUPPORTED=0 \
+            -DPNG_SUPPORTED=ON \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
 
       - name: Build mozjpeg
+        env:
+          CCACHE_DIR: ${{ runner.temp }}/ccache
         run: cmake --build mozjpeg/build -j"$(sysctl -n hw.ncpu)"
 
       - name: Stage and verify cjpeg
+        env:
+          VERSION: ${{ inputs.mozjpeg_ref || 'v4.1.5' }}
         run: |
           mkdir -p dist/mozjpeg
           cp mozjpeg/build/cjpeg-static dist/mozjpeg/cjpeg
@@ -90,20 +103,39 @@ jobs:
           file dist/mozjpeg/cjpeg
           lipo -info dist/mozjpeg/cjpeg
           otool -L dist/mozjpeg/cjpeg
+          if otool -L dist/mozjpeg/cjpeg | grep '\.dylib' | grep -vE '/usr/lib/'; then
+            echo "FAIL: non-system dynamic library linked" >&2
+            exit 1
+          fi
           dist/mozjpeg/cjpeg -version || true
+          (cd dist/mozjpeg && zip -q "../mozjpeg-${VERSION}.zip" cjpeg)
+          ls -la dist/*.zip
 
       - name: Upload cjpeg
         uses: actions/upload-artifact@v7
         with:
           name: mozjpeg-macos-arm64
-          path: dist/mozjpeg/cjpeg
+          path: dist/mozjpeg-*.zip
           if-no-files-found: error
           compression-level: 0
+
+      # Upserts the zip into the release named for the current year.
+      - name: Publish to current-year release
+        if: ${{ github.event_name != 'pull_request' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          YEAR=$(date -u +%Y)
+          gh release view "$YEAR" >/dev/null 2>&1 || gh release create "$YEAR" --title "$YEAR" --generate-notes || true
+          gh release upload "$YEAR" dist/mozjpeg-*.zip --clobber
 
   jpegli:
     name: jpegli cli (macos-arm64)
     runs-on: macos-latest
     timeout-minutes: 45
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v7
 
@@ -111,7 +143,7 @@ jobs:
         run: test "$(uname -m)" = "arm64"
 
       - name: Install build tools
-        run: brew install cmake ninja ccache pkg-config
+        run: brew install cmake ninja ccache pkg-config giflib jpeg-turbo
 
       - name: Clone jpegli
         run: |
@@ -138,15 +170,27 @@ jobs:
             jpegli-build-macos-arm64-${{ inputs.jpegli_ref || 'main' }}-
             jpegli-build-macos-arm64-
 
+      # Explicit .a paths: jpegli finds GIF/JPEG with find_package, and a
+      # command-line CMAKE_FIND_LIBRARY_SUFFIXES does not survive project()
+      # on Apple, so the search would fall back to the shared libraries.
+      # Passing the archive paths directly skips that search. OpenEXR is off
+      # so pkg-config cannot pull in its shared libraries either.
       - name: Configure jpegli
+        env:
+          CCACHE_DIR: ${{ runner.temp }}/ccache
         run: |
           cmake -S jpegli -B jpegli/build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DGIF_LIBRARY=$(brew --prefix giflib)/lib/libgif.a \
+            -DGIF_INCLUDE_DIR=$(brew --prefix giflib)/include \
+            -DJPEG_LIBRARY=$(brew --prefix jpeg-turbo)/lib/libjpeg.a \
+            -DJPEG_INCLUDE_DIR=$(brew --prefix jpeg-turbo)/include \
             -DBUILD_SHARED_LIBS=OFF \
             -DJPEGLI_STATIC=ON \
             -DJPEGLI_ENABLE_TOOLS=ON \
             -DJPEGLI_BUNDLE_LIBPNG=ON \
+            -DJPEGLI_ENABLE_OPENEXR=OFF \
             -DBUILD_TESTING=OFF \
             -DJPEGLI_ENABLE_BENCHMARK=OFF \
             -DJPEGLI_ENABLE_MANPAGES=OFF \
@@ -154,6 +198,8 @@ jobs:
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
 
       - name: Build jpegli
+        env:
+          CCACHE_DIR: ${{ runner.temp }}/ccache
         run: cmake --build jpegli/build -j"$(sysctl -n hw.ncpu)"
 
       - name: Stage and verify jpegli cli
@@ -166,11 +212,33 @@ jobs:
           file dist/jpegli/cjpegli dist/jpegli/djpegli
           lipo -info dist/jpegli/cjpegli dist/jpegli/djpegli
           otool -L dist/jpegli/cjpegli
+          if otool -L dist/jpegli/cjpegli dist/jpegli/djpegli | grep '\.dylib' | grep -vE '/usr/lib/'; then
+            echo "FAIL: non-system dynamic library linked" >&2
+            exit 1
+          fi
+          SHA=$(git -C jpegli rev-parse --short=6 HEAD)
+          echo "jpegli version (short sha): $SHA"
+          (cd dist/jpegli && zip -q "../cjpegli-${SHA}.zip" cjpegli)
+          (cd dist/jpegli && zip -q "../djpegli-${SHA}.zip" djpegli)
+          ls -la dist/*.zip
 
       - name: Upload jpegli cli
         uses: actions/upload-artifact@v7
         with:
           name: jpegli-macos-arm64
-          path: dist/jpegli/
+          path: |
+            dist/cjpegli-*.zip
+            dist/djpegli-*.zip
           if-no-files-found: error
           compression-level: 0
+
+      # Upserts the zips into the release named for the current year.
+      - name: Publish to current-year release
+        if: ${{ github.event_name != 'pull_request' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          YEAR=$(date -u +%Y)
+          gh release view "$YEAR" >/dev/null 2>&1 || gh release create "$YEAR" --title "$YEAR" --generate-notes || true
+          gh release upload "$YEAR" dist/cjpegli-*.zip dist/djpegli-*.zip --clobber
