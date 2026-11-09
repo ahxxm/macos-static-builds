@@ -30,6 +30,8 @@ jobs:
     name: mozjpeg cjpeg (macos-arm64)
     runs-on: macos-latest
     timeout-minutes: 45
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v7
 
@@ -108,10 +110,22 @@ jobs:
           if-no-files-found: error
           compression-level: 0
 
+      # Upserts the zip into the release named for the current year.
+      - name: Publish to current-year release
+        if: ${{ github.event_name != 'pull_request' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          YEAR=$(date -u +%Y)
+          gh release view "$YEAR" >/dev/null 2>&1 || gh release create "$YEAR" --title "$YEAR" --generate-notes || true
+          gh release upload "$YEAR" dist/mozjpeg-*.zip --clobber
+
   jpegli:
     name: jpegli cli (macos-arm64)
     runs-on: macos-latest
     timeout-minutes: 45
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v7
 
@@ -194,31 +208,12 @@ jobs:
           if-no-files-found: error
           compression-level: 0
 
-  # Publishes only if both builds succeed. The release is named by year
-  # (YYYY), created once per year and updated on each successful run.
-  publish:
-    name: publish yearly release
-    needs: [mozjpeg, jpegli]
-    if: ${{ success() && github.event_name != 'pull_request' }}
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - name: Download artifacts
-        uses: actions/download-artifact@v8
-        with:
-          path: dist
-
-      - name: Create or update yearly release
+      # Upserts the zips into the release named for the current year.
+      - name: Publish to current-year release
+        if: ${{ github.event_name != 'pull_request' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           YEAR=$(date -u +%Y)
-          ASSETS=$(find dist -name '*.zip' | sort)
-          echo "Release $YEAR assets:"
-          echo "$ASSETS"
-          if gh release view "$YEAR" >/dev/null 2>&1; then
-            gh release upload "$YEAR" $ASSETS --clobber
-          else
-            gh release create "$YEAR" $ASSETS --generate-notes --title "$YEAR"
-          fi
+          gh release view "$YEAR" >/dev/null 2>&1 || gh release create "$YEAR" --title "$YEAR" --generate-notes || true
+          gh release upload "$YEAR" dist/cjpegli-*.zip dist/djpegli-*.zip --clobber
