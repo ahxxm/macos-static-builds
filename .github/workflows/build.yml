@@ -69,6 +69,7 @@ jobs:
           CCACHE_DIR: ${{ runner.temp }}/ccache
         run: |
           cmake -S mozjpeg -B mozjpeg/build -G Ninja \
+            -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_OSX_ARCHITECTURES=arm64 \
             -DENABLE_SHARED=OFF \
