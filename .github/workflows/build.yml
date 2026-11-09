@@ -52,9 +52,7 @@ jobs:
         uses: actions/cache@v6
         with:
           path: ${{ runner.temp }}/ccache
-          key: ccache-macos-arm64-${{ hashFiles('.github/workflows/build.yml') }}
-          restore-keys: |
-            ccache-macos-arm64-
+          key: ccache-mozjpeg
 
       - name: Restore build directory
         uses: actions/cache@v6
@@ -157,9 +155,7 @@ jobs:
         uses: actions/cache@v6
         with:
           path: ${{ runner.temp }}/ccache
-          key: ccache-macos-arm64-${{ hashFiles('.github/workflows/build.yml') }}
-          restore-keys: |
-            ccache-macos-arm64-
+          key: ccache-cjpegli
 
       - name: Restore build directory
         uses: actions/cache@v6
