@@ -1,0 +1,93 @@
+name: Bump upstream pins
+
+on:
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+# Creating a PR with GITHUB_TOKEN needs Settings -> Actions -> General ->
+# Workflow permissions -> "Allow GitHub Actions to create and merge pull requests".
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: bump-pins
+  cancel-in-progress: false
+
+jobs:
+  bump:
+    name: Check upstream and open PR
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Read current pins
+        id: current
+        run: |
+          set -a; . ./versions.env; set +a
+          echo "mozjpeg=$MOZJPEG_REF" >> "$GITHUB_OUTPUT"
+          echo "jpegli=$JPEGLI_REF" >> "$GITHUB_OUTPUT"
+
+      - name: Look up upstream
+        id: upstream
+        run: |
+          mozjpeg=$(git ls-remote --tags --refs https://github.com/mozilla/mozjpeg 'v*' \
+            | sed 's|.*refs/tags/||' | sort -V | tail -1)
+          jpegli=$(git ls-remote https://github.com/google/jpegli refs/heads/main | cut -f1)
+          test -n "$mozjpeg" && test -n "$jpegli"
+          echo "mozjpeg=$mozjpeg" >> "$GITHUB_OUTPUT"
+          echo "jpegli=$jpegli" >> "$GITHUB_OUTPUT"
+
+      - name: Rewrite pins
+        id: rewrite
+        env:
+          MOZJPEG_NEW: ${{ steps.upstream.outputs.mozjpeg }}
+          JPEGLI_NEW: ${{ steps.upstream.outputs.jpegli }}
+        run: |
+          sed -i -E "s|^MOZJPEG_REF=.*|MOZJPEG_REF=${MOZJPEG_NEW}|" versions.env
+          sed -i -E "s|^JPEGLI_REF=.*|JPEGLI_REF=${JPEGLI_NEW}|" versions.env
+          if git diff --quiet -- versions.env; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            git diff -- versions.env
+          fi
+
+      - name: Open or update PR
+        if: steps.rewrite.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OLD_MOZJPEG: ${{ steps.current.outputs.mozjpeg }}
+          OLD_JPEGLI: ${{ steps.current.outputs.jpegli }}
+          NEW_MOZJPEG: ${{ steps.upstream.outputs.mozjpeg }}
+          NEW_JPEGLI: ${{ steps.upstream.outputs.jpegli }}
+        run: |
+          branch=bump/upstream-pins
+          # Force: the branch is reused across bumps, so a plain push fails
+          # once it has diverged.
+          git -c user.name="github-actions[bot]" \
+              -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+              commit -am "bump pins: mozjpeg ${OLD_MOZJPEG} -> ${NEW_MOZJPEG}, jpegli ${OLD_JPEGLI:0:7} -> ${NEW_JPEGLI:0:7}"
+          git push --force origin "HEAD:refs/heads/${branch}"
+
+          cat > body.md <<EOF
+          Bumps the upstream pins in \`versions.env\`.
+
+          | | before | after |
+          |---|---|---|
+          | mozjpeg | \`${OLD_MOZJPEG}\` | \`${NEW_MOZJPEG}\` |
+          | jpegli | \`${OLD_JPEGLI:0:7}\` | \`${NEW_JPEGLI:0:7}\` |
+
+          mozjpeg: https://github.com/mozilla/mozjpeg/compare/${OLD_MOZJPEG}...${NEW_MOZJPEG}
+          jpegli: https://github.com/google/jpegli/compare/${OLD_JPEGLI}...${NEW_JPEGLI}
+          EOF
+
+          open_pr=$(gh pr list --head "$branch" --state open --json number --jq '.[0].number')
+          if [ -n "$open_pr" ]; then
+            gh pr edit "$open_pr" --body-file body.md
+          else
+            gh pr create --base main --head "$branch" \
+              --title "Bump upstream pins" --body-file body.md
+          fi

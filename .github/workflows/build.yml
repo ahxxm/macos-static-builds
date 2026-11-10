@@ -7,12 +7,10 @@ on:
     inputs:
       mozjpeg_ref:
         description: "mozjpeg branch, tag, or commit"
-        default: "v4.1.5"
-        required: false
+        required: true
       jpegli_ref:
         description: "jpegli branch, tag, or commit"
-        default: "main"
-        required: false
+        required: true
 
 permissions:
   contents: read
@@ -26,8 +24,28 @@ env:
   CCACHE_MAXSIZE: 1G
 
 jobs:
+  pins:
+    name: Resolve pins
+    runs-on: ubuntu-latest
+    outputs:
+      mozjpeg_ref: ${{ steps.resolve.outputs.mozjpeg_ref }}
+      jpegli_ref: ${{ steps.resolve.outputs.jpegli_ref }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Resolve upstream refs
+        id: resolve
+        env:
+          MOZJPEG_OVERRIDE: ${{ inputs.mozjpeg_ref }}
+          JPEGLI_OVERRIDE: ${{ inputs.jpegli_ref }}
+        run: |
+          set -a; . ./versions.env; set +a
+          echo "mozjpeg_ref=${MOZJPEG_OVERRIDE:-$MOZJPEG_REF}" >> "$GITHUB_OUTPUT"
+          echo "jpegli_ref=${JPEGLI_OVERRIDE:-$JPEGLI_REF}" >> "$GITHUB_OUTPUT"
+
   mozjpeg:
     name: mozjpeg cjpeg (macos-arm64)
+    needs: pins
     runs-on: macos-latest
     timeout-minutes: 45
     permissions:
@@ -45,7 +63,7 @@ jobs:
         run: |
           git clone --depth 1 https://github.com/mozilla/mozjpeg mozjpeg
           cd mozjpeg
-          git fetch --depth 1 origin "${{ inputs.mozjpeg_ref || 'v4.1.5' }}"
+          git fetch --depth 1 origin "${{ needs.pins.outputs.mozjpeg_ref }}"
           git checkout FETCH_HEAD
 
       - name: Restore ccache
@@ -58,9 +76,9 @@ jobs:
         uses: actions/cache@v6
         with:
           path: mozjpeg/build
-          key: mozjpeg-build-macos-arm64-${{ inputs.mozjpeg_ref || 'v4.1.5' }}-${{ hashFiles('.github/workflows/build.yml') }}
+          key: mozjpeg-build-macos-arm64-${{ needs.pins.outputs.mozjpeg_ref }}-${{ hashFiles('.github/workflows/build.yml') }}
           restore-keys: |
-            mozjpeg-build-macos-arm64-${{ inputs.mozjpeg_ref || 'v4.1.5' }}-
+            mozjpeg-build-macos-arm64-${{ needs.pins.outputs.mozjpeg_ref }}-
             mozjpeg-build-macos-arm64-
 
       # v4.1.5 spells these ENABLE_SHARED/ENABLE_STATIC (master renamed them to BUILD_SHARED_LIBS).
@@ -92,7 +110,7 @@ jobs:
 
       - name: Stage and verify cjpeg
         env:
-          VERSION: ${{ inputs.mozjpeg_ref || 'v4.1.5' }}
+          VERSION: ${{ needs.pins.outputs.mozjpeg_ref }}
         run: |
           mkdir -p dist/mozjpeg
           cp mozjpeg/build/cjpeg-static dist/mozjpeg/cjpeg
@@ -130,6 +148,7 @@ jobs:
 
   jpegli:
     name: jpegli cli (macos-arm64)
+    needs: pins
     runs-on: macos-latest
     timeout-minutes: 45
     permissions:
@@ -147,7 +166,7 @@ jobs:
         run: |
           git clone --depth 1 https://github.com/google/jpegli jpegli
           cd jpegli
-          git fetch --depth 1 origin "${{ inputs.jpegli_ref || 'main' }}"
+          git fetch --depth 1 origin "${{ needs.pins.outputs.jpegli_ref }}"
           git checkout FETCH_HEAD
           git submodule update --init --recursive --depth 1
 
@@ -161,9 +180,9 @@ jobs:
         uses: actions/cache@v6
         with:
           path: jpegli/build
-          key: jpegli-build-macos-arm64-${{ inputs.jpegli_ref || 'main' }}-${{ hashFiles('.github/workflows/build.yml') }}
+          key: jpegli-build-macos-arm64-${{ needs.pins.outputs.jpegli_ref }}-${{ hashFiles('.github/workflows/build.yml') }}
           restore-keys: |
-            jpegli-build-macos-arm64-${{ inputs.jpegli_ref || 'main' }}-
+            jpegli-build-macos-arm64-${{ needs.pins.outputs.jpegli_ref }}-
             jpegli-build-macos-arm64-
 
       # Explicit .a paths: jpegli finds GIF/JPEG with find_package, and a
