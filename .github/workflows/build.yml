@@ -300,6 +300,10 @@ jobs:
           VERSION="${EMACS_REF#emacs-}"
           cd "emacs-$VERSION"
           export PATH="$(brew --prefix texinfo)/bin:$PATH"
+          # Fence pkg-config to our prefix so optional features (lcms2, png,
+          # ...) find nothing instead of a brew keg to leak; gnutls and
+          # tree-sitter are preset and never consult it.
+          export PKG_CONFIG_LIBDIR="$RUNNER_TEMP/tls/lib/pkgconfig"
           export CPPFLAGS="-I$RUNNER_TEMP/tls/include -I$(brew --prefix gmp)/include -I$(brew --prefix tree-sitter)/include"
           export LDFLAGS="-L$GITHUB_WORKSPACE/staticlib"
           export LIBGNUTLS_CFLAGS="-I$RUNNER_TEMP/tls/include"
