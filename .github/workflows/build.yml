@@ -300,6 +300,7 @@ jobs:
               --without-p11-kit --with-included-libtasn1 --with-included-unistring \
               --disable-tools --disable-doc --disable-libdane \
               PKG_CONFIG_PATH="$TLS/lib/pkgconfig" \
+              CPPFLAGS="-I$(brew --prefix gmp)/include" \
               LDFLAGS="-L$TLS/lib -L$(brew --prefix gmp)/lib" \
             && make -j"$(sysctl -n hw.ncpu)" install)
           cp "$TLS"/lib/lib{gnutls,nettle,hogweed}.a staticlib/
