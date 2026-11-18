@@ -337,7 +337,7 @@ jobs:
           test "$(dist/emacs/bin/emacs --batch --eval '(princ (+ 2 2))')" = 4
           (cd dist && zip -qr "emacs-nox-${VERSION}.zip" emacs)
 
-      - run: ./publish.sh dist/emacs/bin/emacs "dist/emacs-nox-*.zip"
+      - run: ./publish.sh dist/emacs "dist/emacs-nox-*.zip"
 
       - name: Upload emacs
         uses: actions/upload-artifact@v7
