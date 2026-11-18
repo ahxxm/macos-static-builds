@@ -1,5 +1,4 @@
 #!/bin/sh
-# Reject non-system dylibs, then upsert zips into the current-year release.
 # Usage: publish.sh "<binaries or dirs>" "<zip globs>"; dirs are audited
 # recursively for every Mach-O they ship.
 set -eu

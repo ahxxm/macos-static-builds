@@ -241,7 +241,7 @@ jobs:
       - name: Check runner is arm64
         run: test "$(uname -m)" = "arm64"
 
-      # Terminal-only feature set, mirroring Homebrew core 'emacs'.
+      # Feature set mirrors Homebrew core 'emacs', the no-X build on macOS.
       - name: Install build tools
         run: brew install pkgconf texinfo gmp tree-sitter
 
@@ -300,9 +300,8 @@ jobs:
           VERSION="${EMACS_REF#emacs-}"
           cd "emacs-$VERSION"
           export PATH="$(brew --prefix texinfo)/bin:$PATH"
-          # Fence pkg-config to our prefix so optional features (lcms2, png,
-          # ...) find nothing instead of a brew keg to leak; gnutls and
-          # tree-sitter are preset and never consult it.
+          # Fence pkg-config so auto-detection finds no brew kegs to leak;
+          # gnutls and tree-sitter are preset and never consult it.
           export PKG_CONFIG_LIBDIR="$RUNNER_TEMP/tls/lib/pkgconfig"
           export CPPFLAGS="-I$RUNNER_TEMP/tls/include -I$(brew --prefix gmp)/include -I$(brew --prefix tree-sitter)/include"
           export LDFLAGS="-L$GITHUB_WORKSPACE/staticlib"
