@@ -122,13 +122,31 @@ jobs:
           cp mozjpeg/build/cjpeg-static dist/mozjpeg/cjpeg
           dist/mozjpeg/cjpeg -version || true
           (cd dist/mozjpeg && zip -q "../mozjpeg-${VERSION}.zip" cjpeg)
-          ls -la dist/*.zip
 
-      - uses: ./.github/actions/publish
+      - name: Reject non-system dynamic libraries
+        run: |
+          if otool -L dist/mozjpeg/cjpeg | grep '\.dylib' | grep -vE '/usr/lib/'; then
+            echo "FAIL: non-system dynamic library linked" >&2
+            exit 1
+          fi
+
+      - name: Upload cjpeg
+        uses: actions/upload-artifact@v7
         with:
-          binaries: dist/mozjpeg/cjpeg
-          artifact: mozjpeg-macos-arm64
-          zips: dist/mozjpeg-*.zip
+          name: mozjpeg-macos-arm64
+          path: dist/mozjpeg-*.zip
+          if-no-files-found: error
+          compression-level: 0
+
+      - name: Publish to current-year release
+        if: ${{ github.event_name != 'pull_request' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          YEAR=$(date -u +%Y)
+          gh release view "$YEAR" >/dev/null 2>&1 || gh release create "$YEAR" --title "$YEAR" --generate-notes || true
+          gh release upload "$YEAR" dist/mozjpeg-*.zip --clobber
 
   jpegli:
     name: jpegli cli (macos-arm64)
@@ -210,15 +228,33 @@ jobs:
           echo "jpegli version (short sha): $SHA"
           (cd dist/jpegli && zip -q "../cjpegli-${SHA}.zip" cjpegli)
           (cd dist/jpegli && zip -q "../djpegli-${SHA}.zip" djpegli)
-          ls -la dist/*.zip
 
-      - uses: ./.github/actions/publish
+      - name: Reject non-system dynamic libraries
+        run: |
+          if otool -L dist/jpegli/cjpegli dist/jpegli/djpegli | grep '\.dylib' | grep -vE '/usr/lib/'; then
+            echo "FAIL: non-system dynamic library linked" >&2
+            exit 1
+          fi
+
+      - name: Upload jpegli cli
+        uses: actions/upload-artifact@v7
         with:
-          binaries: dist/jpegli/cjpegli dist/jpegli/djpegli
-          artifact: jpegli-macos-arm64
-          zips: |
+          name: jpegli-macos-arm64
+          path: |
             dist/cjpegli-*.zip
             dist/djpegli-*.zip
+          if-no-files-found: error
+          compression-level: 0
+
+      - name: Publish to current-year release
+        if: ${{ github.event_name != 'pull_request' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          YEAR=$(date -u +%Y)
+          gh release view "$YEAR" >/dev/null 2>&1 || gh release create "$YEAR" --title "$YEAR" --generate-notes || true
+          gh release upload "$YEAR" dist/cjpegli-*.zip dist/djpegli-*.zip --clobber
 
   emacs:
     name: emacs-nox (macos-arm64)
@@ -339,10 +375,28 @@ jobs:
           dist/emacs/bin/emacs --version
           test "$(dist/emacs/bin/emacs --batch --eval '(princ (+ 2 2))')" = 4
           (cd dist && zip -qr "emacs-nox-${VERSION}.zip" emacs)
-          ls -la dist/*.zip
 
-      - uses: ./.github/actions/publish
+      - name: Reject non-system dynamic libraries
+        run: |
+          if otool -L dist/emacs/bin/emacs | grep '\.dylib' | grep -vE '/usr/lib/'; then
+            echo "FAIL: non-system dynamic library linked" >&2
+            exit 1
+          fi
+
+      - name: Upload emacs
+        uses: actions/upload-artifact@v7
         with:
-          binaries: dist/emacs/bin/emacs
-          artifact: emacs-nox-macos-arm64
-          zips: dist/emacs-nox-*.zip
+          name: emacs-nox-macos-arm64
+          path: dist/emacs-nox-*.zip
+          if-no-files-found: error
+          compression-level: 0
+
+      - name: Publish to current-year release
+        if: ${{ github.event_name != 'pull_request' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          YEAR=$(date -u +%Y)
+          gh release view "$YEAR" >/dev/null 2>&1 || gh release create "$YEAR" --title "$YEAR" --generate-notes || true
+          gh release upload "$YEAR" dist/emacs-nox-*.zip --clobber
