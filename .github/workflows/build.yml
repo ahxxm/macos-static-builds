@@ -241,11 +241,11 @@ jobs:
       - name: Check runner is arm64
         run: test "$(uname -m)" = "arm64"
 
-      # Feature set mirrors Homebrew core 'emacs', the no-X build on macOS.
+      # Flags and deps mirror Homebrew core 'emacs'.
       - name: Install build tools
         run: brew install pkgconf texinfo gmp tree-sitter
 
-      # brew gnutls ships no .a; nettle and gnutls come from pinned sources.
+      # brew gnutls ships no .a.
       - name: Build static gnutls stack
         run: |
           set -a; . ./versions.env; set +a
@@ -271,7 +271,7 @@ jobs:
             && make -j"$(sysctl -n hw.ncpu)" install)
           cp "$TLS"/lib/lib{gnutls,nettle,hogweed}.a staticlib/
 
-      # staticlib/ holds only .a files, so every -l resolves to an archive, not a brew dylib.
+      # Searched first via LDFLAGS, so -l resolves to an archive, not a brew dylib.
       - name: Stage static archives
         run: |
           missing=""
@@ -291,8 +291,7 @@ jobs:
           curl -fsSLO "https://ftpmirror.gnu.org/emacs/${EMACS_REF}.tar.xz"
           tar xf "${EMACS_REF}.tar.xz"
 
-      # Preset LIBGNUTLS_*/TREE_SITTER_* override pkg-config and thereby drop
-      # gnutls.pc's Libs.private, so the macOS frameworks are passed by hand.
+      # Presetting overrides pkg-config, dropping gnutls.pc's Libs.private, hence the frameworks below.
       - name: Configure emacs
         env:
           EMACS_REF: ${{ needs.pins.outputs.emacs_ref }}
@@ -300,8 +299,7 @@ jobs:
           VERSION="${EMACS_REF#emacs-}"
           cd "emacs-$VERSION"
           export PATH="$(brew --prefix texinfo)/bin:$PATH"
-          # Fence pkg-config so auto-detection finds no brew kegs to leak;
-          # gnutls and tree-sitter are preset and never consult it.
+          # Hide brew from pkg-config auto-detection.
           export PKG_CONFIG_LIBDIR="$RUNNER_TEMP/tls/lib/pkgconfig"
           export CPPFLAGS="-I$RUNNER_TEMP/tls/include -I$(brew --prefix gmp)/include -I$(brew --prefix tree-sitter)/include"
           export LDFLAGS="-L$GITHUB_WORKSPACE/staticlib"
