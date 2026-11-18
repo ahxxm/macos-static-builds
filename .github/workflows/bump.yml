@@ -29,6 +29,7 @@ jobs:
           set -a; . ./versions.env; set +a
           echo "mozjpeg=$MOZJPEG_REF" >> "$GITHUB_OUTPUT"
           echo "jpegli=$JPEGLI_REF" >> "$GITHUB_OUTPUT"
+          echo "emacs=$EMACS_REF" >> "$GITHUB_OUTPUT"
 
       - name: Look up upstream
         id: upstream
@@ -36,18 +37,24 @@ jobs:
           mozjpeg=$(git ls-remote --tags --refs https://github.com/mozilla/mozjpeg 'v*' \
             | sed 's|.*refs/tags/||' | sort -V | tail -1)
           jpegli=$(git ls-remote https://github.com/google/jpegli refs/heads/main | cut -f1)
-          test -n "$mozjpeg" && test -n "$jpegli"
+          # Stable releases only (emacs-X.Y); pretests carry a third component.
+          emacs=$(git ls-remote --tags --refs https://github.com/emacs-mirror/emacs 'emacs-*' \
+            | sed 's|.*refs/tags/||' | grep -E '^emacs-[0-9]+\.[0-9]+$' | sort -V | tail -1)
+          test -n "$mozjpeg" && test -n "$jpegli" && test -n "$emacs"
           echo "mozjpeg=$mozjpeg" >> "$GITHUB_OUTPUT"
           echo "jpegli=$jpegli" >> "$GITHUB_OUTPUT"
+          echo "emacs=$emacs" >> "$GITHUB_OUTPUT"
 
       - name: Rewrite pins
         id: rewrite
         env:
           MOZJPEG_NEW: ${{ steps.upstream.outputs.mozjpeg }}
           JPEGLI_NEW: ${{ steps.upstream.outputs.jpegli }}
+          EMACS_NEW: ${{ steps.upstream.outputs.emacs }}
         run: |
           sed -i -E "s|^MOZJPEG_REF=.*|MOZJPEG_REF=${MOZJPEG_NEW}|" versions.env
           sed -i -E "s|^JPEGLI_REF=.*|JPEGLI_REF=${JPEGLI_NEW}|" versions.env
+          sed -i -E "s|^EMACS_REF=.*|EMACS_REF=${EMACS_NEW}|" versions.env
           if git diff --quiet -- versions.env; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
           else
@@ -61,15 +68,17 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           OLD_MOZJPEG: ${{ steps.current.outputs.mozjpeg }}
           OLD_JPEGLI: ${{ steps.current.outputs.jpegli }}
+          OLD_EMACS: ${{ steps.current.outputs.emacs }}
           NEW_MOZJPEG: ${{ steps.upstream.outputs.mozjpeg }}
           NEW_JPEGLI: ${{ steps.upstream.outputs.jpegli }}
+          NEW_EMACS: ${{ steps.upstream.outputs.emacs }}
         run: |
           branch=bump/upstream-pins
           # Force: the branch is reused across bumps, so a plain push fails
           # once it has diverged.
           git -c user.name="github-actions[bot]" \
               -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
-              commit -am "bump pins: mozjpeg ${OLD_MOZJPEG} -> ${NEW_MOZJPEG}, jpegli ${OLD_JPEGLI:0:7} -> ${NEW_JPEGLI:0:7}"
+              commit -am "bump pins: mozjpeg ${OLD_MOZJPEG} -> ${NEW_MOZJPEG}, jpegli ${OLD_JPEGLI:0:7} -> ${NEW_JPEGLI:0:7}, emacs ${OLD_EMACS} -> ${NEW_EMACS}"
           git push --force origin "HEAD:refs/heads/${branch}"
 
           cat > body.md <<EOF
@@ -79,9 +88,11 @@ jobs:
           |---|---|---|
           | mozjpeg | \`${OLD_MOZJPEG}\` | \`${NEW_MOZJPEG}\` |
           | jpegli | \`${OLD_JPEGLI:0:7}\` | \`${NEW_JPEGLI:0:7}\` |
+          | emacs | \`${OLD_EMACS}\` | \`${NEW_EMACS}\` |
 
           mozjpeg: https://github.com/mozilla/mozjpeg/compare/${OLD_MOZJPEG}...${NEW_MOZJPEG}
           jpegli: https://github.com/google/jpegli/compare/${OLD_JPEGLI}...${NEW_JPEGLI}
+          emacs: https://github.com/emacs-mirror/emacs/compare/${OLD_EMACS}...${NEW_EMACS}
           EOF
 
           open_pr=$(gh pr list --head "$branch" --state open --json number --jq '.[0].number')

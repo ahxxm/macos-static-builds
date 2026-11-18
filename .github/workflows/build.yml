@@ -11,6 +11,9 @@ on:
       jpegli_ref:
         description: "jpegli branch, tag, or commit"
         required: true
+      emacs_ref:
+        description: "emacs release tag, e.g. emacs-31.1"
+        required: true
 
 permissions:
   contents: read
@@ -30,6 +33,7 @@ jobs:
     outputs:
       mozjpeg_ref: ${{ steps.resolve.outputs.mozjpeg_ref }}
       jpegli_ref: ${{ steps.resolve.outputs.jpegli_ref }}
+      emacs_ref: ${{ steps.resolve.outputs.emacs_ref }}
     steps:
       - uses: actions/checkout@v7
 
@@ -38,10 +42,12 @@ jobs:
         env:
           MOZJPEG_OVERRIDE: ${{ inputs.mozjpeg_ref }}
           JPEGLI_OVERRIDE: ${{ inputs.jpegli_ref }}
+          EMACS_OVERRIDE: ${{ inputs.emacs_ref }}
         run: |
           set -a; . ./versions.env; set +a
           echo "mozjpeg_ref=${MOZJPEG_OVERRIDE:-$MOZJPEG_REF}" >> "$GITHUB_OUTPUT"
           echo "jpegli_ref=${JPEGLI_OVERRIDE:-$JPEGLI_REF}" >> "$GITHUB_OUTPUT"
+          echo "emacs_ref=${EMACS_OVERRIDE:-$EMACS_REF}" >> "$GITHUB_OUTPUT"
 
   mozjpeg:
     name: mozjpeg cjpeg (macos-arm64)
@@ -257,3 +263,130 @@ jobs:
           YEAR=$(date -u +%Y)
           gh release view "$YEAR" >/dev/null 2>&1 || gh release create "$YEAR" --title "$YEAR" --generate-notes || true
           gh release upload "$YEAR" dist/cjpegli-*.zip dist/djpegli-*.zip --clobber
+
+  emacs:
+    name: emacs-nox (macos-arm64)
+    needs: pins
+    runs-on: macos-latest
+    timeout-minutes: 60
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Check runner is arm64
+        run: test "$(uname -m)" = "arm64"
+
+      # Homebrew ships no separate emacs-nox formula: core 'emacs' builds the
+      # terminal-only editor on macOS (--without-x --without-ns). This job
+      # mirrors its configure flags and dependency set (gnutls, tree-sitter,
+      # gmp); libxml2 and ncurses stay the system libraries, as the formula
+      # intends. The GNU release tarball is what the formula builds from, so
+      # configure and the info manuals are already generated.
+      - name: Install build tools
+        run: brew install pkgconf texinfo gnutls tree-sitter gmp
+
+      # staticlib/ holds only .a symlinks, and LDFLAGS searches it before the
+      # keg lib dirs, so every -l resolves to the archive instead of the
+      # brew dylib.
+      - name: Stage static archives
+        run: |
+          mkdir -p staticlib
+          ln_static() {
+            a="$(brew --prefix "$1")/lib/$2"
+            test -f "$a" || { echo "missing static archive: $a" >&2; exit 1; }
+            ln -s "$a" staticlib/
+          }
+          ln_static gnutls libgnutls.a
+          ln_static nettle libnettle.a
+          ln_static nettle libhogweed.a
+          ln_static libtasn1 libtasn1.a
+          ln_static p11-kit libp11-kit.a
+          ln_static libunistring libunistring.a
+          ln_static libidn2 libidn2.a
+          ln_static gettext libintl.a
+          ln_static gmp libgmp.a
+          ln_static tree-sitter libtree-sitter.a
+
+      - name: Download emacs
+        env:
+          EMACS_REF: ${{ needs.pins.outputs.emacs_ref }}
+        run: |
+          curl -fsSLO "https://ftpmirror.gnu.org/emacs/${EMACS_REF}.tar.xz"
+          tar xf "${EMACS_REF}.tar.xz"
+
+      # pkg.m4 honors preset *_CFLAGS/*_LIBS over pkg-config, so gnutls and
+      # tree-sitter point straight at the staged archives. GMP is found by
+      # gnulib's own -lgmp probe, which LDFLAGS resolves to the archive too.
+      # libxml2 falls back to the SDK headers plus system -lxml2 (a /usr/lib
+      # dylib, allowed by the check below).
+      - name: Configure emacs
+        env:
+          EMACS_REF: ${{ needs.pins.outputs.emacs_ref }}
+        run: |
+          VERSION="${EMACS_REF#emacs-}"
+          cd "emacs-$VERSION"
+          export PATH="$(brew --prefix texinfo)/bin:$PATH"
+          export CPPFLAGS="-I$(brew --prefix gmp)/include -I$(brew --prefix tree-sitter)/include"
+          export LDFLAGS="-L$GITHUB_WORKSPACE/staticlib"
+          export LIBGNUTLS_CFLAGS="-I$(brew --prefix gnutls)/include"
+          export LIBGNUTLS_LIBS="-lgnutls -lhogweed -lnettle -lgmp -ltasn1 -lp11-kit -lunistring -lidn2 -lintl"
+          export TREE_SITTER_CFLAGS="-I$(brew --prefix tree-sitter)/include"
+          export TREE_SITTER_LIBS="-ltree-sitter"
+          ./configure \
+            --prefix="$GITHUB_WORKSPACE/dist/emacs" \
+            --disable-acl \
+            --with-gnutls \
+            --with-xml2 \
+            --with-modules \
+            --with-tree-sitter \
+            --without-x \
+            --without-ns \
+            --without-dbus \
+            --without-selinux \
+            --without-imagemagick
+
+      - name: Build and install emacs
+        env:
+          EMACS_REF: ${{ needs.pins.outputs.emacs_ref }}
+        run: |
+          VERSION="${EMACS_REF#emacs-}"
+          export PATH="$(brew --prefix texinfo)/bin:$PATH"
+          make -C "emacs-$VERSION" -j"$(sysctl -n hw.ncpu)"
+          make -C "emacs-$VERSION" install
+
+      - name: Stage and verify emacs
+        env:
+          EMACS_REF: ${{ needs.pins.outputs.emacs_ref }}
+        run: |
+          VERSION="${EMACS_REF#emacs-}"
+          codesign --force --sign - dist/emacs/bin/emacs
+          file dist/emacs/bin/emacs
+          otool -L dist/emacs/bin/emacs
+          if otool -L dist/emacs/bin/emacs | grep '\.dylib' | grep -vE '/usr/lib/'; then
+            echo "FAIL: non-system dynamic library linked" >&2
+            exit 1
+          fi
+          dist/emacs/bin/emacs --version
+          test "$(dist/emacs/bin/emacs --batch --eval '(princ (+ 2 2))')" = 4
+          (cd dist && zip -qr "emacs-nox-${VERSION}.zip" emacs)
+          ls -la dist/*.zip
+
+      - name: Upload emacs
+        uses: actions/upload-artifact@v7
+        with:
+          name: emacs-nox-macos-arm64
+          path: dist/emacs-nox-*.zip
+          if-no-files-found: error
+          compression-level: 0
+
+      # Upserts the zip into the release named for the current year.
+      - name: Publish to current-year release
+        if: ${{ github.event_name != 'pull_request' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          YEAR=$(date -u +%Y)
+          gh release view "$YEAR" >/dev/null 2>&1 || gh release create "$YEAR" --title "$YEAR" --generate-notes || true
+          gh release upload "$YEAR" dist/emacs-nox-*.zip --clobber

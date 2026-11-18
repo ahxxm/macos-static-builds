@@ -4,8 +4,14 @@ Static `macos-arm64` builds of:
 
 - mozjpeg `cjpeg`
 - jpegli `cjpegli` and `djpegli`
+- emacs-nox `emacs` (terminal build, same configure flags as Homebrew core `emacs`)
 
 ## Known limits
+
+emacs-nox
+
+- The zip is an install tree (`bin`, `libexec`, `share`), not a single file; `bin/emacs` finds its pdump and lisp relative to itself.
+- `emacs` links the macOS system libraries (libxml2, ncurses, zlib) as dylibs under `/usr/lib`.
 
 EXIF preserve
 
