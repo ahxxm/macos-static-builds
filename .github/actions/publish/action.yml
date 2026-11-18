@@ -1,0 +1,52 @@
+name: Verify and publish
+description: >-
+  Codesign built binaries, verify no non-system dylibs are linked, upload the
+  artifact, and upsert the zips into the current-year release.
+inputs:
+  binaries:
+    description: "Binaries to codesign and inspect (space-separated paths)"
+    required: true
+  artifact:
+    description: "Artifact name for actions/upload-artifact"
+    required: true
+  zips:
+    description: "Zip globs to upload and publish (newline-separated)"
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Codesign binaries
+      shell: bash
+      run: codesign --force --sign - ${{ inputs.binaries }}
+
+    - name: Inspect and gate
+      shell: bash
+      run: |
+        file ${{ inputs.binaries }}
+        lipo -info ${{ inputs.binaries }}
+        otool -L ${{ inputs.binaries }}
+        if otool -L ${{ inputs.binaries }} | grep '\.dylib' | grep -vE '/usr/lib/'; then
+          echo "FAIL: non-system dynamic library linked" >&2
+          exit 1
+        fi
+
+    - name: Upload
+      uses: actions/upload-artifact@v7
+      with:
+        name: ${{ inputs.artifact }}
+        path: ${{ inputs.zips }}
+        if-no-files-found: error
+        compression-level: 0
+
+    # Upserts the zips into the release named for the current year.
+    - name: Publish to current-year release
+      if: ${{ github.event_name != 'pull_request' }}
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        GH_REPO: ${{ github.repository }}
+      run: |
+        YEAR=$(date -u +%Y)
+        gh release view "$YEAR" >/dev/null 2>&1 || gh release create "$YEAR" --title "$YEAR" --generate-notes || true
+        gh release upload "$YEAR" ${{ inputs.zips }} --clobber
