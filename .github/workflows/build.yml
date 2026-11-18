@@ -25,6 +25,8 @@ concurrency:
 env:
   CMAKE_BUILD_TYPE: Release
   CCACHE_MAXSIZE: 1G
+  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  GH_REPO: ${{ github.repository }}
 
 jobs:
   pins:
@@ -123,12 +125,7 @@ jobs:
           dist/mozjpeg/cjpeg -version || true
           (cd dist/mozjpeg && zip -q "../mozjpeg-${VERSION}.zip" cjpeg)
 
-      - name: Reject non-system dynamic libraries
-        run: |
-          if otool -L dist/mozjpeg/cjpeg | grep '\.dylib' | grep -vE '/usr/lib/'; then
-            echo "FAIL: non-system dynamic library linked" >&2
-            exit 1
-          fi
+      - run: ./publish.sh dist/mozjpeg/cjpeg "dist/mozjpeg-*.zip"
 
       - name: Upload cjpeg
         uses: actions/upload-artifact@v7
@@ -137,16 +134,6 @@ jobs:
           path: dist/mozjpeg-*.zip
           if-no-files-found: error
           compression-level: 0
-
-      - name: Publish to current-year release
-        if: ${{ github.event_name != 'pull_request' }}
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_REPO: ${{ github.repository }}
-        run: |
-          YEAR=$(date -u +%Y)
-          gh release view "$YEAR" >/dev/null 2>&1 || gh release create "$YEAR" --title "$YEAR" --generate-notes || true
-          gh release upload "$YEAR" dist/mozjpeg-*.zip --clobber
 
   jpegli:
     name: jpegli cli (macos-arm64)
@@ -229,12 +216,7 @@ jobs:
           (cd dist/jpegli && zip -q "../cjpegli-${SHA}.zip" cjpegli)
           (cd dist/jpegli && zip -q "../djpegli-${SHA}.zip" djpegli)
 
-      - name: Reject non-system dynamic libraries
-        run: |
-          if otool -L dist/jpegli/cjpegli dist/jpegli/djpegli | grep '\.dylib' | grep -vE '/usr/lib/'; then
-            echo "FAIL: non-system dynamic library linked" >&2
-            exit 1
-          fi
+      - run: ./publish.sh "dist/jpegli/cjpegli dist/jpegli/djpegli" "dist/cjpegli-*.zip dist/djpegli-*.zip"
 
       - name: Upload jpegli cli
         uses: actions/upload-artifact@v7
@@ -245,16 +227,6 @@ jobs:
             dist/djpegli-*.zip
           if-no-files-found: error
           compression-level: 0
-
-      - name: Publish to current-year release
-        if: ${{ github.event_name != 'pull_request' }}
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_REPO: ${{ github.repository }}
-        run: |
-          YEAR=$(date -u +%Y)
-          gh release view "$YEAR" >/dev/null 2>&1 || gh release create "$YEAR" --title "$YEAR" --generate-notes || true
-          gh release upload "$YEAR" dist/cjpegli-*.zip dist/djpegli-*.zip --clobber
 
   emacs:
     name: emacs-nox (macos-arm64)
@@ -269,18 +241,11 @@ jobs:
       - name: Check runner is arm64
         run: test "$(uname -m)" = "arm64"
 
-      # Homebrew ships no separate emacs-nox formula: core 'emacs' builds the
-      # terminal-only editor on macOS (--without-x --without-ns). This job
-      # mirrors its configure flags and dependency set (gnutls, tree-sitter,
-      # gmp); libxml2 and ncurses stay the system libraries, as the formula
-      # intends. The GNU release tarball is what the formula builds from, so
-      # configure and the info manuals are already generated.
+      # Terminal-only feature set, mirroring Homebrew core 'emacs'.
       - name: Install build tools
         run: brew install pkgconf texinfo gmp tree-sitter
 
-      # Homebrew's gnutls keg ships no libgnutls.a, so the TLS stack is built
-      # from source: nettle against brew gmp's archive, then gnutls with its
-      # bundled tasn1/unistring and no p11-kit.
+      # brew gnutls ships no .a; nettle and gnutls come from pinned sources.
       - name: Build static gnutls stack
         run: |
           set -a; . ./versions.env; set +a
@@ -297,7 +262,8 @@ jobs:
           tar xf "${GNUTLS_REF}.tar.xz"
           (cd "${GNUTLS_REF}" \
             && ./configure --prefix="$TLS" --disable-shared --enable-static \
-              --without-p11-kit --with-included-libtasn1 --with-included-unistring \
+              --without-p11-kit --without-brotli --without-zstd --without-idn \
+              --with-included-libtasn1 --with-included-unistring \
               --disable-tools --disable-doc --disable-libdane \
               PKG_CONFIG_PATH="$TLS/lib/pkgconfig" \
               CPPFLAGS="-I$(brew --prefix gmp)/include" \
@@ -305,9 +271,7 @@ jobs:
             && make -j"$(sysctl -n hw.ncpu)" install)
           cp "$TLS"/lib/lib{gnutls,nettle,hogweed}.a staticlib/
 
-      # staticlib/ holds only .a files, and LDFLAGS searches it before the
-      # keg lib dirs, so every -l resolves to the archive instead of the
-      # brew dylib.
+      # staticlib/ holds only .a files, so every -l resolves to an archive, not a brew dylib.
       - name: Stage static archives
         run: |
           missing=""
@@ -327,12 +291,8 @@ jobs:
           curl -fsSLO "https://ftpmirror.gnu.org/emacs/${EMACS_REF}.tar.xz"
           tar xf "${EMACS_REF}.tar.xz"
 
-      # pkg.m4 honors preset *_CFLAGS/*_LIBS over pkg-config, so gnutls and
-      # tree-sitter point straight at the staged archives; the gnutls build
-      # bundled its tasn1/unistring and skipped p11-kit, so its closure is
-      # nettle + gmp. GMP is found by gnulib's own -lgmp probe, which LDFLAGS
-      # resolves to the archive too. libxml2 falls back to the SDK headers
-      # plus system -lxml2 (a /usr/lib dylib, allowed by the check below).
+      # Preset LIBGNUTLS_*/TREE_SITTER_* override pkg-config and thereby drop
+      # gnutls.pc's Libs.private, so the macOS frameworks are passed by hand.
       - name: Configure emacs
         env:
           EMACS_REF: ${{ needs.pins.outputs.emacs_ref }}
@@ -343,7 +303,7 @@ jobs:
           export CPPFLAGS="-I$RUNNER_TEMP/tls/include -I$(brew --prefix gmp)/include -I$(brew --prefix tree-sitter)/include"
           export LDFLAGS="-L$GITHUB_WORKSPACE/staticlib"
           export LIBGNUTLS_CFLAGS="-I$RUNNER_TEMP/tls/include"
-          export LIBGNUTLS_LIBS="-lgnutls -lhogweed -lnettle -lgmp"
+          export LIBGNUTLS_LIBS="-lgnutls -lhogweed -lnettle -lgmp -framework CoreFoundation -framework Security"
           export TREE_SITTER_CFLAGS="-I$(brew --prefix tree-sitter)/include"
           export TREE_SITTER_LIBS="-ltree-sitter"
           ./configure \
@@ -377,12 +337,7 @@ jobs:
           test "$(dist/emacs/bin/emacs --batch --eval '(princ (+ 2 2))')" = 4
           (cd dist && zip -qr "emacs-nox-${VERSION}.zip" emacs)
 
-      - name: Reject non-system dynamic libraries
-        run: |
-          if otool -L dist/emacs/bin/emacs | grep '\.dylib' | grep -vE '/usr/lib/'; then
-            echo "FAIL: non-system dynamic library linked" >&2
-            exit 1
-          fi
+      - run: ./publish.sh dist/emacs/bin/emacs "dist/emacs-nox-*.zip"
 
       - name: Upload emacs
         uses: actions/upload-artifact@v7
@@ -391,13 +346,3 @@ jobs:
           path: dist/emacs-nox-*.zip
           if-no-files-found: error
           compression-level: 0
-
-      - name: Publish to current-year release
-        if: ${{ github.event_name != 'pull_request' }}
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_REPO: ${{ github.repository }}
-        run: |
-          YEAR=$(date -u +%Y)
-          gh release view "$YEAR" >/dev/null 2>&1 || gh release create "$YEAR" --title "$YEAR" --generate-notes || true
-          gh release upload "$YEAR" dist/emacs-nox-*.zip --clobber
