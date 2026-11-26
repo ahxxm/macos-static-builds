@@ -88,6 +88,7 @@ jobs:
           if [ -n "$open_pr" ]; then
             gh pr edit "$open_pr" --body-file body.md
           else
+            sleep 5
             gh pr create --base main --head "$branch" \
               --title "Bump upstream pins" --body-file body.md
           fi
